@@ -31,7 +31,7 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
   // 跳转排名状态
   const [targetRank, setTargetRank] = useState('');
 
-  // 过渡状态：用于控制淡入淡出
+  // 过渡状态
   const [isTransitioning, setIsTransitioning] = useState(false);
 
   const [currentTime, setCurrentTime] = useState(0);
@@ -49,25 +49,21 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
   const performTransition = (nextAction: () => void) => {
       if (switchingRef.current || isTransitioning) return;
       
-      switchingRef.current = true; // 锁定，防止重复触发
-      setIsPlaying(false); // 开始过渡时暂停播放
-      setIsTransitioning(true); // 触发淡出 (opacity -> 0)
+      switchingRef.current = true; // 锁定
+      setIsPlaying(false); // 暂停
+      setIsTransitioning(true); // 淡出
 
-      // 等待淡出动画完成
       setTimeout(() => {
-          // 执行数据切换
-          nextAction();
+          nextAction(); // 数据切换
 
-          // 给一点缓冲时间让 DOM 更新，然后触发淡入
           setTimeout(() => {
-              setIsTransitioning(false); // 触发淡入 (opacity -> 100)
-              setIsPlaying(true); // 恢复播放状态
+              setIsTransitioning(false); // 淡入
+              setIsPlaying(true); // 恢复播放
               switchingRef.current = false; // 解锁
           }, 50);
           
       }, TRANSITION_DURATION_MS);
   };
-
 
   // 同步 Ref
   useEffect(() => {
@@ -98,7 +94,6 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
     setLrcLines([]);
     setCurrentTime(0);
     setElapsedTime(0);
-    // 注意：switchingRef 的解锁现在移到了 performTransition 中
     
     if (audioRef.current) {
         audioRef.current.pause();
@@ -158,7 +153,6 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
   }, [currentSong]); 
 
   const handleCanPlay = () => {
-      // 增加 isTransitioning 检查，确保不在过渡中自动播放
       if (isPlayingRef.current && !isTransitioning && currentSong?.hasAudio && audioRef.current) {
           const start = currentSong.highlightStartTime || 0;
           if (Math.abs(audioRef.current.currentTime - start) > 0.5) {
@@ -226,7 +220,6 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
       }
   };
 
-  // 修改：使用 performTransition 包装切换逻辑
   const handleNext = () => {
       if (currentSongIndex < playlist.length - 1) {
           performTransition(() => {
@@ -237,7 +230,6 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
       }
   };
 
-  // 修改：使用 performTransition 包装切换逻辑
   const handlePrev = () => {
       if (currentSongIndex > 0) {
           performTransition(() => {
@@ -263,7 +255,6 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
     }
   };
 
-  // 修改：使用 performTransition 包装跳转逻辑
   const handleJumpToRank = () => {
       if (!targetRank) return;
       const rank = parseInt(targetRank);
@@ -287,7 +278,6 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
       return "text-slate-400";
   };
 
-  // 定义通用的过渡 CSS 类名
   const transitionClass = `transition-opacity ease-in-out duration-${TRANSITION_DURATION_MS} ${isTransitioning ? 'opacity-0' : 'opacity-100'}`;
 
   if (playlist.length === 0) {
@@ -309,7 +299,6 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
             -ms-overflow-style: none;
             scrollbar-width: none;
           }
-          /* 动态设置过渡时长 */
           .duration-${TRANSITION_DURATION_MS} {
               transition-duration: ${TRANSITION_DURATION_MS}ms;
           }
@@ -334,7 +323,7 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
            </div>
        )}
 
-       {/* Background Layer - 应用过渡 */}
+       {/* Background Layer */}
        <div className={`absolute inset-0 z-0 ${transitionClass}`}>
            {currentSong.albumCover ? (
                 <img 
@@ -349,7 +338,7 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
        </div>
 
        {/* Main Content */}
-       <div className="relative z-10 flex flex-col h-full p-6 md:p-8 max-w-[1800px] mx-auto">
+       <div className="relative z-10 flex flex-col h-full p-6 md:p-8 max-w-[1600px] mx-auto">
            {/* Header */}
            <div className="flex-none mb-2 md:mb-4 flex justify-end items-start h-8">
                 {isPlaying && !isTransitioning && (
@@ -362,15 +351,15 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
                 )}
            </div>
 
-           {/* Central Stage */}
-           <div className="flex-1 flex flex-col md:flex-row gap-12 lg:gap-24 items-stretch justify-center overflow-hidden">
+           {/* Central Stage - Gap 回调 */}
+           <div className="flex-1 flex flex-col md:flex-row gap-8 lg:gap-16 items-stretch justify-center overflow-hidden">
                
-               {/* LEFT COLUMN: Visuals (Record & Rank) - 应用过渡 */}
+               {/* LEFT COLUMN: Visuals (Record & Rank) */}
                <div className={`flex-1 flex flex-col items-center justify-center relative ${transitionClass}`}>
                    <div className="relative group perspective-1000 scale-90 md:scale-100 transition-transform duration-700">
-                        {/* 唱片容器 */}
+                        {/* 唱片容器：尺寸回调到 w-[30rem] (约480px) */}
                         <div 
-                                className={`w-80 h-80 md:w-[32rem] md:h-[32rem] lg:w-[38rem] lg:h-[38rem] rounded-full border-4 border-white/10 shadow-2xl overflow-hidden relative flex items-center justify-center bg-black ${isPlaying && !isTransitioning ? 'animate-[spin_20s_linear_infinite]' : ''}`}
+                                className={`w-64 h-64 md:w-80 md:h-80 lg:w-[30rem] lg:h-[30rem] rounded-full border-4 border-white/10 shadow-2xl overflow-hidden relative flex items-center justify-center bg-black ${isPlaying && !isTransitioning ? 'animate-[spin_20s_linear_infinite]' : ''}`}
                                 style={{ animationPlayState: isPlaying && !isTransitioning ? 'running' : 'paused' }}
                         >
                             <div className="absolute inset-0 rounded-full border-[20px] border-black/80 z-20" />
@@ -384,70 +373,76 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
                             )}
                         </div>
                         
-                        {/* Rank Badge */}
-                        <div className="absolute -top-10 -left-10 md:-top-6 md:-left-6 z-40 transition-all hover:scale-105">
+                        {/* Rank Badge: 尺寸回调 */}
+                        <div className="absolute -top-6 -left-6 md:-top-4 md:-left-4 z-40 transition-all hover:scale-105">
                              <div className="relative">
-                                <div className="text-8xl md:text-[12rem] pr-6 font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-200 via-amber-500 to-amber-700 drop-shadow-[0_10px_10px_rgba(0,0,0,0.8)] leading-none italic font-sans" style={{ WebkitTextStroke: '2px rgba(255,255,255,0.1)' }}>
-                                    <span className="text-5xl md:text-8xl mr-1 opacity-90 align-top not-italic text-amber-500">#</span>{currentSong.rank}
+                                {/* 字号回调到 text-[9rem] */}
+                                <div className="text-7xl md:text-[9rem] pr-6 font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-200 via-amber-500 to-amber-700 drop-shadow-[0_10px_10px_rgba(0,0,0,0.8)] leading-none italic font-sans" style={{ WebkitTextStroke: '1.5px rgba(255,255,255,0.1)' }}>
+                                    <span className="text-4xl md:text-6xl mr-1 opacity-90 align-top not-italic text-amber-500">#</span>{currentSong.rank}
                                 </div>
                              </div>
                         </div>
                    </div>
                </div>
 
-               {/* RIGHT COLUMN: Info & Lyrics - 应用过渡 */}
+               {/* RIGHT COLUMN: Info & Lyrics */}
                <div className={`flex-1 flex flex-col min-w-0 max-w-4xl justify-center h-full ${transitionClass}`}>
-                    {/* Top Section: Metadata & Scores */}
-                    {/* 移除了之前的 animate-in 类，避免冲突 */}
-                    <div className="space-y-6" key={currentSong.id + 'info'}>
-                        <div className="space-y-2">
-                            <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold leading-normal drop-shadow-lg line-clamp-2 text-white tracking-tight pb-2">
+                    {/* Top Section */}
+                    <div className="space-y-4" key={currentSong.id + 'info'}>
+                        <div className="space-y-1">
+                            {/* 标题：字号回调 text-6xl */}
+                            <h1 className="text-3xl md:text-5xl lg:text-6xl font-bold leading-normal drop-shadow-lg line-clamp-2 text-white tracking-tight pb-2">
                                 {currentSong.title}
                             </h1>
-                            <p className="text-xl md:text-3xl text-indigo-200/80 font-light tracking-wide flex items-center gap-3">
-                                {currentSong.albumName} <span className="text-white/30 text-lg px-3 py-0.5 border border-white/20 rounded-full font-mono">{currentSong.albumYear}</span>
+                            {/* 专辑信息：字号回调 text-2xl */}
+                            <p className="text-lg md:text-2xl text-indigo-200/80 font-light tracking-wide flex items-center gap-3">
+                                {currentSong.albumName} <span className="text-white/30 text-base px-2 py-0.5 border border-white/20 rounded-full font-mono">{currentSong.albumYear}</span>
                             </p>
                         </div>
 
                         {currentSong.comment && (
-                            <div className="relative pl-8 border-l-4 border-indigo-500/50 py-2">
-                                <p className="text-xl text-white/90 italic font-serif leading-relaxed">"{currentSong.comment}"</p>
+                            <div className="relative pl-6 border-l-4 border-indigo-500/50 py-1">
+                                <p className="text-lg text-white/90 italic font-serif leading-relaxed">"{currentSong.comment}"</p>
                             </div>
                         )}
 
                         {/* Scores Row */}
-                        <div className="flex items-center gap-10 pt-8 pb-4">
+                        <div className="flex items-center gap-8 pt-6 pb-2">
                              <div className="flex flex-col relative group cursor-default">
-                                 <div className="absolute -top-8 left-1 text-lg font-bold uppercase tracking-[0.3em] text-indigo-300 opacity-80">Total Score</div>
-                                 <div className="text-8xl md:text-9xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-indigo-100 to-indigo-300 tracking-tighter drop-shadow-[0_0_30px_rgba(99,102,241,0.6)] leading-none -ml-1">
+                                 {/* Total Label: 位置尺寸回调 */}
+                                 <div className="absolute -top-5 left-0 text-sm font-bold uppercase tracking-[0.3em] text-indigo-300 opacity-80">Total Score</div>
+                                 {/* Total Value: 字号回调 text-8xl */}
+                                 <div className="text-7xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-indigo-100 to-indigo-300 tracking-tighter drop-shadow-[0_0_30px_rgba(99,102,241,0.6)] leading-none -ml-1">
                                      {currentSong.totalScore.toFixed(2)}
                                  </div>
                              </div>
                              
-                             <div className="h-28 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent mx-2 hidden sm:block"></div>
+                             {/* Divider */}
+                             <div className="h-20 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent mx-2 hidden sm:block"></div>
 
-                             <div className="flex gap-10 hidden sm:flex">
-                                 <div className="flex flex-col items-center gap-2">
-                                     <div className="text-xl font-bold text-indigo-300 uppercase tracking-wider">作词</div>
-                                     <div className={`text-7xl font-bold font-mono ${getScoreColorClass(currentSong.scores.lyrics)}`}>{currentSong.scores.lyrics.toFixed(1)}</div>
+                             <div className="flex gap-8 hidden sm:flex">
+                                 {/* 维度分: 字号回调到 text-5xl */}
+                                 <div className="flex flex-col items-center gap-1">
+                                     <div className="text-base font-bold text-indigo-300 uppercase tracking-wider">作词</div>
+                                     <div className={`text-5xl font-bold font-mono ${getScoreColorClass(currentSong.scores.lyrics)}`}>{currentSong.scores.lyrics.toFixed(1)}</div>
                                  </div>
-                                 <div className="flex flex-col items-center gap-2">
-                                     <div className="text-xl font-bold text-indigo-300 uppercase tracking-wider">作曲</div>
-                                     <div className={`text-7xl font-bold font-mono ${getScoreColorClass(currentSong.scores.composition)}`}>{currentSong.scores.composition.toFixed(1)}</div>
+                                 <div className="flex flex-col items-center gap-1">
+                                     <div className="text-base font-bold text-indigo-300 uppercase tracking-wider">作曲</div>
+                                     <div className={`text-5xl font-bold font-mono ${getScoreColorClass(currentSong.scores.composition)}`}>{currentSong.scores.composition.toFixed(1)}</div>
                                  </div>
-                                 <div className="flex flex-col items-center gap-2">
-                                     <div className="text-xl font-bold text-indigo-300 uppercase tracking-wider">编曲</div>
-                                     <div className={`text-7xl font-bold font-mono ${getScoreColorClass(currentSong.scores.arrangement)}`}>{currentSong.scores.arrangement.toFixed(1)}</div>
+                                 <div className="flex flex-col items-center gap-1">
+                                     <div className="text-base font-bold text-indigo-300 uppercase tracking-wider">编曲</div>
+                                     <div className={`text-5xl font-bold font-mono ${getScoreColorClass(currentSong.scores.arrangement)}`}>{currentSong.scores.arrangement.toFixed(1)}</div>
                                  </div>
                              </div>
                         </div>
                     </div>
 
                     {/* Divider */}
-                    <div className="h-px w-full bg-gradient-to-r from-white/20 via-white/10 to-transparent my-6" />
+                    <div className="h-px w-full bg-gradient-to-r from-white/20 via-white/10 to-transparent my-4" />
 
                     {/* Bottom Section: Lyrics Area */}
-                    <div className="relative w-full h-64 md:h-80 lg:h-96 flex-col justify-end">
+                    <div className="relative w-full h-56 md:h-72 lg:h-80 flex-col justify-end">
                        {lrcLines.length > 0 ? (
                            <div className="absolute inset-0 w-full h-full">
                                 {/* Gradient Mask */}
@@ -476,7 +471,8 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
                                                         }
                                                     `}
                                                 >
-                                                    <p className="text-2xl md:text-3xl lg:text-4xl leading-relaxed whitespace-pre-wrap break-words">
+                                                    {/* 歌词: 字号回调 text-3xl */}
+                                                    <p className="text-lg md:text-xl lg:text-3xl leading-relaxed whitespace-pre-wrap break-words">
                                                         {line.text}
                                                     </p>
                                                 </div>
