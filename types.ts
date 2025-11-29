@@ -7,7 +7,11 @@ export interface Score {
 export interface Song {
   id: string;
   title: string;
+  comment?: string; // Max 20 chars
   scores: Score;
+  hasAudio?: boolean; // New: Local audio file linked
+  hasLrc?: boolean;   // New: Local lrc file linked
+  highlightStartTime?: number; // New: Start time for playback (seconds)
 }
 
 export interface Album {
@@ -24,7 +28,7 @@ export interface Singer {
   albums: Album[];
 }
 
-export type ViewMode = 'entry' | 'dashboard';
+export type ViewMode = 'entry' | 'dashboard' | 'presentation';
 
 // Helper types for analytics
 export interface SongWithStats extends Song {

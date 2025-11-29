@@ -59,3 +59,106 @@ export const fileToBase64 = (file: File): Promise<string> => {
     reader.onerror = error => reject(error);
   });
 };
+
+// --- New Robust Data & Presentation Utilities ---
+
+/**
+ * Ensures imported JSON data adheres to strict structure, providing defaults for missing fields
+ * and handling case-sensitivity or pluralization issues.
+ */
+export const sanitizeSingerImport = (data: any[]): Singer[] => {
+  if (!Array.isArray(data)) return [];
+  
+  return data.map((singer: any) => ({
+    id: singer.id || generateId(),
+    name: singer.name || 'Unknown Singer',
+    albums: Array.isArray(singer.albums) ? singer.albums.map((album: any) => ({
+      id: album.id || generateId(),
+      title: album.title || 'Untitled Album',
+      year: album.year || 'Unknown Year',
+      coverUrl: album.coverUrl,
+      songs: Array.isArray(album.songs) ? album.songs.map((song: any) => {
+        // Compatibility: handle 'score' vs 'scores'
+        const rawScores = song.scores || song.score || {};
+        
+        // Compatibility: handle Case Sensitivity (lyrics vs Lyrics) & Parsing
+        const parseScore = (val: any) => {
+            const num = parseFloat(val);
+            return isNaN(num) ? 0 : num;
+        };
+
+        const scores = {
+          lyrics: parseScore(rawScores.lyrics ?? rawScores.Lyrics),
+          composition: parseScore(rawScores.composition ?? rawScores.Composition),
+          arrangement: parseScore(rawScores.arrangement ?? rawScores.Arrangement),
+        };
+
+        return {
+          id: song.id || generateId(),
+          title: song.title || 'Untitled Song',
+          comment: song.comment || '',
+          scores: scores,
+          hasAudio: song.hasAudio,
+          hasLrc: song.hasLrc,
+          highlightStartTime: song.highlightStartTime
+        };
+      }) : []
+    })) : []
+  }));
+};
+
+export interface PresentationSong extends SongWithStats {
+    rank: number;
+}
+
+/**
+ * Prepares songs for video presentation:
+ * 1. Calculates all stats.
+ * 2. Assigns ranks based on Descending Score (Rank #1 is highest).
+ * 3. Returns array Sorted Ascending (Lowest Rank Number first? No, Lowest Score first).
+ *    Goal: Countdown effect. Play #100, then #99... then #1.
+ *    So we need to sort such that the song with the lowest score (highest rank number) is first.
+ */
+export const getPresentationSongs = (singer: Singer): PresentationSong[] => {
+    const { allSongs } = enrichSingerData(singer);
+
+    // 1. Sort Descending to assign proper Ranks (#1 = Best)
+    const sortedByRank = [...allSongs].sort(sortSongsAlgorithm);
+
+    // 2. Map to add Rank property
+    const songsWithRank = sortedByRank.map((s, idx) => ({
+        ...s,
+        rank: idx + 1
+    }));
+
+    // 3. Reverse to get Ascending order (Worst -> Best) for the "Countdown" reveal
+    return songsWithRank.reverse();
+};
+
+export interface LrcLine {
+    time: number; // Seconds
+    text: string;
+}
+
+export const parseLrc = (lrcContent: string): LrcLine[] => {
+    const lines = lrcContent.split('\n');
+    const regex = /^\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
+    const lrcData: LrcLine[] = [];
+
+    lines.forEach(line => {
+        const match = line.match(regex);
+        if (match) {
+            const minutes = parseInt(match[1], 10);
+            const seconds = parseInt(match[2], 10);
+            const milliseconds = parseInt(match[3], 10);
+            const text = match[4].trim();
+            // Convert to seconds. ms can be 2 or 3 digits
+            const time = minutes * 60 + seconds + milliseconds / (match[3].length === 3 ? 1000 : 100);
+            if (text) {
+                lrcData.push({ time, text });
+            }
+        }
+    });
+
+    return lrcData.sort((a, b) => a.time - b.time);
+};
