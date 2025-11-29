@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Singer } from '../types';
 import { getPresentationSongs, PresentationSong, parseLrc, LrcLine } from '../utils';
-import { IconPlay, IconPause, IconRefresh, IconX, IconMusic } from '../components/Icons';
+import { IconPlay, IconPause, IconRefresh, IconX, IconMusic, IconChevronLeft, IconChevronRight } from '../components/Icons';
 import { Button } from '../components/UI';
 import { getFileHandle, verifyPermission } from '../db';
 
@@ -12,21 +12,78 @@ interface RankingPresentationViewProps {
 }
 
 const UPDATE_INTERVAL_MS = 100;
+// 歌词同步补偿值
+const LYRIC_SYNC_OFFSET = 0.5;
+// 过渡动画时长 (毫秒)
+const TRANSITION_DURATION_MS = 600;
 
 export const RankingPresentationView: React.FC<RankingPresentationViewProps> = ({ singer, onExit, durationMs }) => {
   const [playlist, setPlaylist] = useState<PresentationSong[]>([]);
   const [currentSongIndex, setCurrentSongIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [elapsedTime, setElapsedTime] = useState(0); // For timer-based fallback
-  const [currentTime, setCurrentTime] = useState(0); // Actual Audio Time
+  
+  // 播放状态
+  const [isPlaying, setIsPlaying] = useState(true);
+  const isPlayingRef = useRef(true);
+  
+  // 控制栏折叠状态
+  const [showControls, setShowControls] = useState(true);
+
+  // 跳转排名状态
+  const [targetRank, setTargetRank] = useState('');
+
+  // 过渡状态：用于控制淡入淡出
+  const [isTransitioning, setIsTransitioning] = useState(false);
+
+  const [currentTime, setCurrentTime] = useState(0);
+  const [elapsedTime, setElapsedTime] = useState(0); 
   const [permissionNeeded, setPermissionNeeded] = useState(false);
   const [permissionHandle, setPermissionHandle] = useState<FileSystemFileHandle | null>(null);
   const [lrcLines, setLrcLines] = useState<LrcLine[]>([]);
   
+  const switchingRef = useRef(false);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lrcContainerRef = useRef<HTMLDivElement>(null);
 
-  // Initialize playlist
+  // --- 核心：处理淡入淡出过渡的通用函数 ---
+  const performTransition = (nextAction: () => void) => {
+      if (switchingRef.current || isTransitioning) return;
+      
+      switchingRef.current = true; // 锁定，防止重复触发
+      setIsPlaying(false); // 开始过渡时暂停播放
+      setIsTransitioning(true); // 触发淡出 (opacity -> 0)
+
+      // 等待淡出动画完成
+      setTimeout(() => {
+          // 执行数据切换
+          nextAction();
+
+          // 给一点缓冲时间让 DOM 更新，然后触发淡入
+          setTimeout(() => {
+              setIsTransitioning(false); // 触发淡入 (opacity -> 100)
+              setIsPlaying(true); // 恢复播放状态
+              switchingRef.current = false; // 解锁
+          }, 50);
+          
+      }, TRANSITION_DURATION_MS);
+  };
+
+
+  // 同步 Ref
+  useEffect(() => {
+      isPlayingRef.current = isPlaying;
+      if (audioRef.current) {
+          if (isPlaying) {
+              if (audioRef.current.readyState >= 3) {
+                   audioRef.current.play().catch(() => {});
+              }
+          } else {
+              audioRef.current.pause();
+          }
+      }
+  }, [isPlaying]);
+
+  // 初始化播放列表
   useEffect(() => {
     const songs = getPresentationSongs(singer);
     setPlaylist(songs);
@@ -34,29 +91,24 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
 
   const currentSong = playlist[currentSongIndex];
 
-  // Load Audio and LRC
+  // 歌曲加载副作用
   useEffect(() => {
     if (!currentSong) return;
     
-    // Reset state
     setLrcLines([]);
     setCurrentTime(0);
     setElapsedTime(0);
+    // 注意：switchingRef 的解锁现在移到了 performTransition 中
+    
+    if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = ""; 
+    }
     
     let isMounted = true;
 
     const loadMedia = async () => {
-        if (!currentSong.hasAudio) {
-            // Fallback mode
-            if (audioRef.current) {
-                audioRef.current.pause();
-                audioRef.current.src = "";
-            }
-            if (isPlaying) {
-                // Keep playing state true to trigger timer effect
-            }
-            return;
-        }
+        if (!currentSong.hasAudio) return;
 
         try {
             const handle = await getFileHandle(currentSong.id, 'audio');
@@ -67,7 +119,7 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
                 if (isMounted) {
                     setPermissionHandle(handle);
                     setPermissionNeeded(true);
-                    setIsPlaying(false);
+                    setIsPlaying(false); 
                 }
                 return;
             }
@@ -75,24 +127,18 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
             const file = await handle.getFile();
             const url = URL.createObjectURL(file);
             
-            if (audioRef.current) {
+            if (isMounted && audioRef.current) {
                 audioRef.current.src = url;
                 const start = currentSong.highlightStartTime || 0;
                 audioRef.current.currentTime = start;
-                setCurrentTime(start); // Init UI immediately
                 
-                if (isPlaying) {
-                    audioRef.current.play().catch(e => console.log("Autoplay prevented", e));
-                }
-            }
-
-            // Load LRC if exists
-            if (currentSong.hasLrc) {
-                const lrcHandle = await getFileHandle(currentSong.id, 'lrc');
-                if (lrcHandle && await verifyPermission(lrcHandle, false)) {
-                    const lrcFile = await lrcHandle.getFile();
-                    const text = await lrcFile.text();
-                    if (isMounted) setLrcLines(parseLrc(text));
+                if (currentSong.hasLrc) {
+                    const lrcHandle = await getFileHandle(currentSong.id, 'lrc');
+                    if (lrcHandle && await verifyPermission(lrcHandle, false)) {
+                        const lrcFile = await lrcHandle.getFile();
+                        const text = await lrcFile.text();
+                        if (isMounted) setLrcLines(parseLrc(text));
+                    }
                 }
             }
 
@@ -105,38 +151,39 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
 
     return () => {
         isMounted = false;
-        if (audioRef.current) {
-             audioRef.current.pause();
+        if (audioRef.current && audioRef.current.src) {
              URL.revokeObjectURL(audioRef.current.src);
         }
     };
-  }, [currentSong?.id, currentSong?.hasAudio, currentSong?.hasLrc]); // Re-run when song changes
+  }, [currentSong]); 
 
-  // Playback Control Effect
-  useEffect(() => {
-      if (!audioRef.current) return;
-      
-      if (isPlaying && !permissionNeeded && currentSong?.hasAudio) {
-          audioRef.current.play().catch(() => setIsPlaying(false));
-      } else {
-          audioRef.current.pause();
+  const handleCanPlay = () => {
+      // 增加 isTransitioning 检查，确保不在过渡中自动播放
+      if (isPlayingRef.current && !isTransitioning && currentSong?.hasAudio && audioRef.current) {
+          const start = currentSong.highlightStartTime || 0;
+          if (Math.abs(audioRef.current.currentTime - start) > 0.5) {
+               audioRef.current.currentTime = start;
+          }
+          
+          const playPromise = audioRef.current.play();
+          if (playPromise !== undefined) {
+              playPromise.catch(error => {
+                  console.log("Autoplay blocked or interrupted:", error);
+              });
+          }
       }
-  }, [isPlaying, permissionNeeded, currentSong?.hasAudio]);
+  };
 
-  // Timer Logic (Fallback for non-audio or when waiting)
   useEffect(() => {
     let interval: number;
-    // Only run fallback timer if NO AUDIO file is present. 
-    // If audio is present, we rely on `timeupdate` and `ended` events.
-    if (isPlaying && currentSong && !currentSong.hasAudio) {
+    if (isPlaying && currentSong && !currentSong.hasAudio && !switchingRef.current) {
       interval = window.setInterval(() => {
         setElapsedTime(prev => {
            const next = prev + UPDATE_INTERVAL_MS;
-           // Fallback duration logic
            const limit = durationMs > 0 ? durationMs : 15000;
            if (next >= limit) {
                handleNext();
-               return 0; 
+               return prev; 
            }
            return next;
         });
@@ -145,24 +192,32 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
     return () => clearInterval(interval);
   }, [isPlaying, currentSong, durationMs]);
 
-  // Audio Event Handlers
   const onAudioTimeUpdate = () => {
-      if (audioRef.current) {
-          setCurrentTime(audioRef.current.currentTime);
+      if (audioRef.current && !switchingRef.current) { 
+          const now = audioRef.current.currentTime;
+          setCurrentTime(now);
           
-          // Scroll Lyrics
-          // Simple logic: Find active index, scroll container
+          const start = currentSong?.highlightStartTime || 0;
+          const playedDuration = (now - start) * 1000;
+          const limit = durationMs > 0 ? durationMs : 15000;
+
+          if (playedDuration >= limit && playedDuration > 500) {
+              handleNext();
+              return; 
+          }
+          
           if (lrcContainerRef.current) {
+             const syncTime = now + LYRIC_SYNC_OFFSET;
              const activeIdx = lrcLines.findIndex((line, i) => {
                  const nextLine = lrcLines[i+1];
-                 return line.time <= audioRef.current!.currentTime && (!nextLine || nextLine.time > audioRef.current!.currentTime);
+                 return line.time <= syncTime && (!nextLine || nextLine.time > syncTime);
              });
              
              if (activeIdx !== -1) {
                  const activeEl = lrcContainerRef.current.children[activeIdx] as HTMLElement;
                  if (activeEl) {
                      lrcContainerRef.current.scrollTo({
-                         top: activeEl.offsetTop - lrcContainerRef.current.clientHeight / 2 + 20,
+                         top: activeEl.offsetTop - lrcContainerRef.current.clientHeight / 2 + 30, 
                          behavior: 'smooth'
                      });
                  }
@@ -171,65 +226,69 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
       }
   };
 
+  // 修改：使用 performTransition 包装切换逻辑
   const handleNext = () => {
       if (currentSongIndex < playlist.length - 1) {
-          setCurrentSongIndex(c => c + 1);
-          setElapsedTime(0);
-          // Keep playing
+          performTransition(() => {
+              setCurrentSongIndex(c => c + 1);
+          });
       } else {
           setIsPlaying(false);
       }
   };
 
-  const handleRequestPermission = async () => {
-      if (permissionHandle) {
-          await verifyPermission(permissionHandle, false); // This triggers the prompt
-          setPermissionNeeded(false);
-          setPermissionHandle(null);
-          setIsPlaying(true); // Auto start
-          
-          // Reload current song media logic
-           // Force re-execution of loadMedia is tricky without refactoring.
-           // Easiest is to toggle song index or reload component, but that's bad UX.
-           // Actually, since we updated verifyPermission result, just re-calling logic is good.
-           // But useEffect deps won't trigger. 
-           // We can manually trigger the load logic or just reload the page/view?
-           // Let's reload the view logic by toggling a key or similar?
-           // Or just duplicate the load logic here.
-           if (currentSong) {
-               const handle = permissionHandle;
-               const file = await handle.getFile();
-               const url = URL.createObjectURL(file);
-               if (audioRef.current) {
-                    audioRef.current.src = url;
-                    audioRef.current.currentTime = currentSong.highlightStartTime || 0;
-                    audioRef.current.play();
-               }
-               // Also load LRC
-               if(currentSong.hasLrc) {
-                   const lrcHandle = await getFileHandle(currentSong.id, 'lrc');
-                   if (lrcHandle && await verifyPermission(lrcHandle, false)) {
-                       const lrcFile = await lrcHandle.getFile();
-                       const text = await lrcFile.text();
-                       setLrcLines(parseLrc(text));
-                   }
-               }
-           }
+  // 修改：使用 performTransition 包装切换逻辑
+  const handlePrev = () => {
+      if (currentSongIndex > 0) {
+          performTransition(() => {
+              setCurrentSongIndex(c => c - 1);
+          });
       }
   };
 
   const handleReset = () => {
-      setIsPlaying(false);
-      setCurrentSongIndex(0);
-      setElapsedTime(0);
-      setCurrentTime(0);
+      performTransition(() => {
+          setCurrentSongIndex(0);
+          setElapsedTime(0);
+          setCurrentTime(0);
+      });
+  };
+  
+  const handleRequestPermission = async () => {
+    if (permissionHandle) {
+        await verifyPermission(permissionHandle, false);
+        setPermissionNeeded(false);
+        setPermissionHandle(null);
+        setIsPlaying(true); 
+    }
+  };
+
+  // 修改：使用 performTransition 包装跳转逻辑
+  const handleJumpToRank = () => {
+      if (!targetRank) return;
+      const rank = parseInt(targetRank);
+      if (isNaN(rank)) return;
+
+      const index = playlist.findIndex(song => song.rank === rank);
+      
+      if (index !== -1 && index !== currentSongIndex) {
+          performTransition(() => {
+              setCurrentSongIndex(index);
+              setTargetRank('');
+          });
+      } else {
+          setTargetRank('');
+      }
   };
 
   const getScoreColorClass = (score: number) => {
-      if (score > 8.5) return "text-amber-400 drop-shadow-[0_0_5px_rgba(251,191,36,0.5)]"; // Excellent
-      if (score >= 7.5) return "text-cyan-400"; // Good
-      return "text-slate-400"; // Average
+      if (score > 8.5) return "text-amber-400 drop-shadow-[0_0_5px_rgba(251,191,36,0.5)]";
+      if (score >= 7.5) return "text-cyan-400";
+      return "text-slate-400";
   };
+
+  // 定义通用的过渡 CSS 类名
+  const transitionClass = `transition-opacity ease-in-out duration-${TRANSITION_DURATION_MS} ${isTransitioning ? 'opacity-0' : 'opacity-100'}`;
 
   if (playlist.length === 0) {
       return (
@@ -242,11 +301,24 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
 
   return (
     <div className="fixed inset-0 z-50 bg-black text-white font-sans overflow-hidden select-none">
-       {/* Audio Element */}
+       <style>{`
+          .no-scrollbar::-webkit-scrollbar {
+            display: none;
+          }
+          .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+          }
+          /* 动态设置过渡时长 */
+          .duration-${TRANSITION_DURATION_MS} {
+              transition-duration: ${TRANSITION_DURATION_MS}ms;
+          }
+       `}</style>
        <audio 
          ref={audioRef} 
          onTimeUpdate={onAudioTimeUpdate}
          onEnded={handleNext}
+         onCanPlay={handleCanPlay} 
          onError={(e) => console.log("Audio Error", e)}
        />
 
@@ -262,12 +334,12 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
            </div>
        )}
 
-       {/* Background Layer with Blur */}
-       <div className="absolute inset-0 z-0">
+       {/* Background Layer - 应用过渡 */}
+       <div className={`absolute inset-0 z-0 ${transitionClass}`}>
            {currentSong.albumCover ? (
                 <img 
                     src={currentSong.albumCover} 
-                    className="w-full h-full object-cover blur-xl opacity-40 scale-110 transition-all duration-1000" 
+                    className="w-full h-full object-cover blur-xl opacity-40 scale-110 transition-transform duration-1000" 
                     key={currentSong.id + 'bg'} 
                 />
            ) : (
@@ -276,16 +348,11 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
            <div className="absolute inset-0 bg-black/40" />
        </div>
 
-       {/* Main Content Container */}
-       <div className="relative z-10 flex flex-col h-full p-8 md:p-16">
-           
+       {/* Main Content */}
+       <div className="relative z-10 flex flex-col h-full p-6 md:p-8 max-w-[1800px] mx-auto">
            {/* Header */}
-           <div className="flex-none mb-4 flex justify-between items-start">
-                <div className="inline-block px-4 py-1 bg-white/10 backdrop-blur-md rounded-full border border-white/20 text-sm font-medium tracking-wider text-indigo-200 uppercase">
-                    Ranking Countdown
-                </div>
-                {/* Visualizer / Status */}
-                {isPlaying && (
+           <div className="flex-none mb-2 md:mb-4 flex justify-end items-start h-8">
+                {isPlaying && !isTransitioning && (
                     <div className="flex items-center gap-1 h-6">
                         <div className="w-1 bg-indigo-400 animate-[bounce_1s_infinite] h-full"></div>
                         <div className="w-1 bg-indigo-400 animate-[bounce_1.2s_infinite] h-3/4"></div>
@@ -296,151 +363,213 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
            </div>
 
            {/* Central Stage */}
-           <div className="flex-1 flex flex-col md:flex-row items-center gap-8 md:gap-16 justify-center">
+           <div className="flex-1 flex flex-col md:flex-row gap-12 lg:gap-24 items-stretch justify-center overflow-hidden">
                
-               {/* Left: Rotating Vinyl & Lyrics */}
-               <div className="relative flex flex-col items-center w-full md:w-auto">
-                   <div className="relative group perspective-1000">
+               {/* LEFT COLUMN: Visuals (Record & Rank) - 应用过渡 */}
+               <div className={`flex-1 flex flex-col items-center justify-center relative ${transitionClass}`}>
+                   <div className="relative group perspective-1000 scale-90 md:scale-100 transition-transform duration-700">
+                        {/* 唱片容器 */}
                         <div 
-                                className={`w-56 h-56 md:w-80 md:h-80 rounded-full border-4 border-white/10 shadow-2xl overflow-hidden relative flex items-center justify-center bg-black ${isPlaying ? 'animate-[spin_10s_linear_infinite]' : ''}`}
-                                style={{ animationPlayState: isPlaying ? 'running' : 'paused' }}
+                                className={`w-80 h-80 md:w-[32rem] md:h-[32rem] lg:w-[38rem] lg:h-[38rem] rounded-full border-4 border-white/10 shadow-2xl overflow-hidden relative flex items-center justify-center bg-black ${isPlaying && !isTransitioning ? 'animate-[spin_20s_linear_infinite]' : ''}`}
+                                style={{ animationPlayState: isPlaying && !isTransitioning ? 'running' : 'paused' }}
                         >
-                            <div className="absolute inset-0 rounded-full border-[15px] border-black/80 z-20" />
+                            <div className="absolute inset-0 rounded-full border-[20px] border-black/80 z-20" />
                             <div className="absolute inset-0 rounded-full bg-[conic-gradient(transparent_0deg,rgba(255,255,255,0.1)_45deg,transparent_90deg)] z-20 pointer-events-none" />
-                            
                             {currentSong.albumCover ? (
                                 <img src={currentSong.albumCover} className="w-full h-full object-cover z-10" />
                             ) : (
                                 <div className="w-full h-full flex items-center justify-center bg-slate-800 z-10">
-                                    <IconMusic className="w-24 h-24 text-slate-600" />
+                                    <IconMusic className="w-32 h-32 text-slate-600" />
                                 </div>
                             )}
-                            
-                            <div className="absolute w-6 h-6 bg-black rounded-full z-30 border border-white/20" />
                         </div>
                         
                         {/* Rank Badge */}
-                        <div className="absolute -top-2 -left-2 md:top-0 md:left-0 z-40">
-                                <div className="text-5xl md:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-br from-yellow-300 to-yellow-600 drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)] font-mono italic">
-                                    #{currentSong.rank}
+                        <div className="absolute -top-10 -left-10 md:-top-6 md:-left-6 z-40 transition-all hover:scale-105">
+                             <div className="relative">
+                                <div className="text-8xl md:text-[12rem] pr-6 font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-200 via-amber-500 to-amber-700 drop-shadow-[0_10px_10px_rgba(0,0,0,0.8)] leading-none italic font-sans" style={{ WebkitTextStroke: '2px rgba(255,255,255,0.1)' }}>
+                                    <span className="text-5xl md:text-8xl mr-1 opacity-90 align-top not-italic text-amber-500">#</span>{currentSong.rank}
                                 </div>
+                             </div>
                         </div>
                    </div>
-
-                   {/* Lyrics Container */}
-                   {lrcLines.length > 0 && (
-                       <div className="mt-8 h-24 md:h-32 w-full max-w-md overflow-hidden relative mask-image-gradient">
-                            <div 
-                                ref={lrcContainerRef} 
-                                className="h-full overflow-y-auto no-scrollbar space-y-3 text-center scroll-smooth"
-                                style={{ scrollBehavior: 'smooth' }}
-                            >
-                                {lrcLines.map((line, idx) => {
-                                    const isActive = line.time <= currentTime && (!lrcLines[idx+1] || lrcLines[idx+1].time > currentTime);
-                                    return (
-                                        <p 
-                                            key={idx} 
-                                            className={`transition-all duration-300 ${isActive ? 'text-yellow-300 font-bold scale-110 drop-shadow-md' : 'text-white/30 text-sm'}`}
-                                        >
-                                            {line.text}
-                                        </p>
-                                    )
-                                })}
-                            </div>
-                            {/* Gradient Masks */}
-                            <div className="absolute top-0 inset-x-0 h-4 bg-gradient-to-b from-black/80 to-transparent pointer-events-none"></div>
-                            <div className="absolute bottom-0 inset-x-0 h-4 bg-gradient-to-t from-black/80 to-transparent pointer-events-none"></div>
-                       </div>
-                   )}
                </div>
 
-               {/* Right: Info & Scores */}
-               <div className="flex-1 text-center md:text-left space-y-6 max-w-2xl w-full">
-                    <div className="space-y-2 animate-in slide-in-from-right-10 fade-in duration-500" key={currentSong.id + 'title'}>
-                        <h1 className="text-3xl md:text-5xl font-bold leading-tight drop-shadow-lg line-clamp-2">
-                            {currentSong.title}
-                        </h1>
-                        <p className="text-lg md:text-2xl text-white/70 font-light">
-                            {currentSong.albumName} <span className="text-white/40 text-base">({currentSong.albumYear})</span>
-                        </p>
-                    </div>
-
-                    {/* Comment Display */}
-                    {currentSong.comment && (
-                        <div className="bg-white/5 backdrop-blur-sm border-l-4 border-indigo-500 px-4 py-3 rounded-r-lg mx-auto md:mx-0 inline-block text-left">
-                            <p className="text-base md:text-lg text-indigo-100 italic font-serif leading-relaxed">
-                                "{currentSong.comment}"
+               {/* RIGHT COLUMN: Info & Lyrics - 应用过渡 */}
+               <div className={`flex-1 flex flex-col min-w-0 max-w-4xl justify-center h-full ${transitionClass}`}>
+                    {/* Top Section: Metadata & Scores */}
+                    {/* 移除了之前的 animate-in 类，避免冲突 */}
+                    <div className="space-y-6" key={currentSong.id + 'info'}>
+                        <div className="space-y-2">
+                            <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold leading-normal drop-shadow-lg line-clamp-2 text-white tracking-tight pb-2">
+                                {currentSong.title}
+                            </h1>
+                            <p className="text-xl md:text-3xl text-indigo-200/80 font-light tracking-wide flex items-center gap-3">
+                                {currentSong.albumName} <span className="text-white/30 text-lg px-3 py-0.5 border border-white/20 rounded-full font-mono">{currentSong.albumYear}</span>
                             </p>
                         </div>
-                    )}
 
-                    <div className="space-y-6 pt-4">
-                        {/* Main Score */}
-                        <div className="inline-flex flex-col items-center md:items-start">
-                             <span className="text-xs uppercase tracking-[0.2em] text-indigo-300 mb-1">Total Score</span>
-                             <div className="text-6xl md:text-8xl font-black text-white tracking-tighter drop-shadow-[0_0_15px_rgba(99,102,241,0.6)]">
-                                 {currentSong.totalScore.toFixed(2)}
+                        {currentSong.comment && (
+                            <div className="relative pl-8 border-l-4 border-indigo-500/50 py-2">
+                                <p className="text-xl text-white/90 italic font-serif leading-relaxed">"{currentSong.comment}"</p>
+                            </div>
+                        )}
+
+                        {/* Scores Row */}
+                        <div className="flex items-center gap-10 pt-8 pb-4">
+                             <div className="flex flex-col relative group cursor-default">
+                                 <div className="absolute -top-8 left-1 text-lg font-bold uppercase tracking-[0.3em] text-indigo-300 opacity-80">Total Score</div>
+                                 <div className="text-8xl md:text-9xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-indigo-100 to-indigo-300 tracking-tighter drop-shadow-[0_0_30px_rgba(99,102,241,0.6)] leading-none -ml-1">
+                                     {currentSong.totalScore.toFixed(2)}
+                                 </div>
+                             </div>
+                             
+                             <div className="h-28 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent mx-2 hidden sm:block"></div>
+
+                             <div className="flex gap-10 hidden sm:flex">
+                                 <div className="flex flex-col items-center gap-2">
+                                     <div className="text-xl font-bold text-indigo-300 uppercase tracking-wider">作词</div>
+                                     <div className={`text-7xl font-bold font-mono ${getScoreColorClass(currentSong.scores.lyrics)}`}>{currentSong.scores.lyrics.toFixed(1)}</div>
+                                 </div>
+                                 <div className="flex flex-col items-center gap-2">
+                                     <div className="text-xl font-bold text-indigo-300 uppercase tracking-wider">作曲</div>
+                                     <div className={`text-7xl font-bold font-mono ${getScoreColorClass(currentSong.scores.composition)}`}>{currentSong.scores.composition.toFixed(1)}</div>
+                                 </div>
+                                 <div className="flex flex-col items-center gap-2">
+                                     <div className="text-xl font-bold text-indigo-300 uppercase tracking-wider">编曲</div>
+                                     <div className={`text-7xl font-bold font-mono ${getScoreColorClass(currentSong.scores.arrangement)}`}>{currentSong.scores.arrangement.toFixed(1)}</div>
+                                 </div>
                              </div>
                         </div>
+                    </div>
 
-                        {/* Sub Scores with Colored Logic */}
-                        <div className="grid grid-cols-3 gap-4 md:gap-6 pt-6 border-t border-white/10">
-                             <div className="text-center md:text-left">
-                                 <div className="text-xs text-white/50 mb-1">作词</div>
-                                 <div className={`text-2xl md:text-3xl font-bold font-mono ${getScoreColorClass(currentSong.scores.lyrics)}`}>
-                                     {currentSong.scores.lyrics.toFixed(1)}
-                                 </div>
-                             </div>
-                             <div className="text-center md:text-left">
-                                 <div className="text-xs text-white/50 mb-1">作曲</div>
-                                 <div className={`text-2xl md:text-3xl font-bold font-mono ${getScoreColorClass(currentSong.scores.composition)}`}>
-                                     {currentSong.scores.composition.toFixed(1)}
-                                 </div>
-                             </div>
-                             <div className="text-center md:text-left">
-                                 <div className="text-xs text-white/50 mb-1">编曲</div>
-                                 <div className={`text-2xl md:text-3xl font-bold font-mono ${getScoreColorClass(currentSong.scores.arrangement)}`}>
-                                     {currentSong.scores.arrangement.toFixed(1)}
-                                 </div>
-                             </div>
-                        </div>
+                    {/* Divider */}
+                    <div className="h-px w-full bg-gradient-to-r from-white/20 via-white/10 to-transparent my-6" />
+
+                    {/* Bottom Section: Lyrics Area */}
+                    <div className="relative w-full h-64 md:h-80 lg:h-96 flex-col justify-end">
+                       {lrcLines.length > 0 ? (
+                           <div className="absolute inset-0 w-full h-full">
+                                {/* Gradient Mask */}
+                                <div 
+                                    className="h-full w-full overflow-hidden"
+                                    style={{ 
+                                        maskImage: 'linear-gradient(180deg, transparent 0%, #000 15%, #000 85%, transparent 100%)',
+                                        WebkitMaskImage: 'linear-gradient(180deg, transparent 0%, #000 15%, #000 85%, transparent 100%)'
+                                    }}
+                                >
+                                    <div 
+                                        ref={lrcContainerRef} 
+                                        className="h-full overflow-y-auto no-scrollbar scroll-smooth py-[50%] md:py-24 pr-4"
+                                    >
+                                        {lrcLines.map((line, idx) => {
+                                            const syncTime = currentTime + LYRIC_SYNC_OFFSET;
+                                            const isActive = line.time <= syncTime && (!lrcLines[idx+1] || lrcLines[idx+1].time > syncTime);
+                                            return (
+                                                <div 
+                                                    key={idx} 
+                                                    className={`
+                                                        transition-all duration-500 ease-out origin-left mb-6
+                                                        ${isActive 
+                                                            ? 'text-yellow-400 scale-105 font-bold drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] opacity-100' 
+                                                            : 'text-white/30 scale-100 blur-[0.5px] opacity-60'
+                                                        }
+                                                    `}
+                                                >
+                                                    <p className="text-2xl md:text-3xl lg:text-4xl leading-relaxed whitespace-pre-wrap break-words">
+                                                        {line.text}
+                                                    </p>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+                           </div>
+                       ) : (
+                           <div className="h-full w-full flex items-center justify-start text-white/10 text-2xl font-light italic">
+                               <p>Instrumental / No Lyrics Available</p>
+                           </div>
+                       )}
                     </div>
                </div>
            </div>
 
-           {/* Bottom: Controls */}
-           <div className="flex-none mt-8 flex justify-center md:justify-end relative z-50">
-                <div className="flex items-center gap-4 md:gap-6 p-3 bg-black/50 backdrop-blur-md rounded-full border border-white/10 shadow-2xl">
-                     <div className="text-sm text-white/50 font-mono ml-3 border-r border-white/10 pr-4 mr-2 hidden sm:block">
-                         {currentSongIndex + 1} <span className="text-white/30">/</span> {playlist.length}
-                     </div>
-                     
-                     <div className="flex gap-2">
-                         <button 
-                            onClick={handleReset} 
-                            className="p-3 rounded-full hover:bg-white/10 transition-colors text-white/70 hover:text-white"
-                            title="重置"
-                         >
+           {/* Footer Controls */}
+           <div className="flex-none mt-2 mb-4 relative z-50 flex flex-col items-center group/controls">
+                {/* Toggle Handle */}
+                <button 
+                    onClick={() => setShowControls(!showControls)}
+                    className="mb-2 text-white/50 hover:text-white transition-colors p-2 rounded-full hover:bg-white/10"
+                    title={showControls ? "收起控制栏" : "展开控制栏"}
+                >
+                     <IconChevronRight className={`w-5 h-5 transition-transform duration-300 ${showControls ? 'rotate-90' : '-rotate-90'}`} />
+                </button>
+
+                {/* Controls Container */}
+                <div 
+                    className={`
+                        flex justify-between items-center w-full transition-all duration-500 ease-in-out overflow-hidden transform
+                        ${showControls ? 'max-h-24 opacity-100 translate-y-0' : 'max-h-0 opacity-0 translate-y-8'}
+                    `}
+                >
+                    {/* Left: Jump to Rank */}
+                    <div className="hidden md:flex items-center gap-4 w-48">
+                        <div className="text-sm text-white/30 font-mono whitespace-nowrap">
+                             {currentSongIndex + 1} / {playlist.length}
+                        </div>
+                        <div className="flex items-center bg-white/10 rounded-lg px-2 py-1 transition-colors focus-within:bg-white/20">
+                            <span className="text-xs text-white/40 mr-1 select-none">#</span>
+                            <input 
+                                type="number" 
+                                className="w-12 bg-transparent border-none text-white text-xs focus:ring-0 p-0 placeholder-white/20 font-mono"
+                                placeholder="Jump"
+                                value={targetRank}
+                                onChange={(e) => setTargetRank(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && handleJumpToRank()}
+                                disabled={isTransitioning}
+                            />
+                        </div>
+                    </div>
+
+                    {/* Center: Playback Controls */}
+                    <div className="flex items-center gap-4 bg-black/40 backdrop-blur-md rounded-full p-2 border border-white/10 shadow-xl transform hover:scale-105 transition-transform scale-90 md:scale-100 mx-auto">
+                         <button onClick={handleReset} disabled={isTransitioning} className="p-3 rounded-full hover:bg-white/10 transition-colors text-white/50 hover:text-white disabled:opacity-50" title="Replay All">
                              <IconRefresh className="w-5 h-5" />
                          </button>
+                         
+                         <button 
+                            onClick={handlePrev} 
+                            disabled={currentSongIndex === 0 || isTransitioning}
+                            className="p-3 rounded-full hover:bg-white/10 transition-colors text-white/50 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+                         >
+                            <IconChevronLeft className="w-5 h-5" />
+                         </button>
+
                          <button 
                             onClick={() => setIsPlaying(!isPlaying)} 
-                            className="p-3 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all hover:scale-105"
-                            title={isPlaying ? "暂停" : "播放"}
+                            disabled={isTransitioning}
+                            className="p-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all active:scale-95 disabled:opacity-80 disabled:hover:bg-indigo-600"
                          >
                              {isPlaying ? <IconPause className="w-6 h-6 fill-current" /> : <IconPlay className="w-6 h-6 fill-current ml-0.5" />}
                          </button>
-                     </div>
 
-                     <button 
-                        onClick={onExit} 
-                        className="flex items-center gap-2 px-4 py-2 rounded-full hover:bg-white/10 text-white/70 hover:text-white transition-colors ml-2"
-                     >
-                         <span className="text-xs font-bold tracking-wider">EXIT</span>
-                         <IconX className="w-4 h-4" />
-                     </button>
+                         <button 
+                            onClick={handleNext} 
+                            disabled={currentSongIndex === playlist.length - 1 || isTransitioning}
+                            className="p-3 rounded-full hover:bg-white/10 transition-colors text-white/50 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+                         >
+                            <IconChevronRight className="w-5 h-5" />
+                         </button>
+
+                         <button onClick={onExit} className="p-3 rounded-full hover:bg-white/10 transition-colors text-white/50 hover:text-red-400" title="Exit Presentation">
+                             <IconX className="w-5 h-5" />
+                         </button>
+                    </div>
+                    
+                    <div className="w-48 hidden md:block"></div> 
                 </div>
            </div>
-    </div>
+       </div> 
+    </div> 
   );
 };
