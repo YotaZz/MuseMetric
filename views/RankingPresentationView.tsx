@@ -410,7 +410,7 @@ export const RankingPresentationView: React.FC<RankingPresentationViewProps> = (
                         <div className="flex items-center gap-8 pt-6 pb-2">
                              <div className="flex flex-col relative group cursor-default">
                                  {/* Total Label: 位置尺寸回调 */}
-                                 <div className="absolute -top-5 left-0 text-sm font-bold uppercase tracking-[0.3em] text-indigo-300 opacity-80">总评</div>
+                                 <div className="absolute -top-5 left-0 text-sm font-bold uppercase tracking-[0.3em] text-indigo-300 opacity-80">Total Score</div>
                                  {/* Total Value: 字号回调 text-8xl */}
                                  <div className="text-7xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-indigo-100 to-indigo-300 tracking-tighter drop-shadow-[0_0_30px_rgba(99,102,241,0.6)] leading-none -ml-1">
                                      {currentSong.totalScore.toFixed(2)}
